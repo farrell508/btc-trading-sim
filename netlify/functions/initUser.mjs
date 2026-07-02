@@ -1,4 +1,4 @@
-import { db } from "./firebaseAdmin.js";
+import { db } from "./firebaseAdmin.mjs";
 
 export default async (req) => {
   try {

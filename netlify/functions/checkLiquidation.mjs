@@ -23,7 +23,6 @@ async function fetchKlinesForRange(startTimeMs, endTimeMs) {
       console.log(`Bybit 응답 상태: ${response.status}, 내용 일부: ${rawText.substring(0, 300)}`);
 
       const data = JSON.parse(rawText);
-      const data = await response.json();
 
       if (data.retCode === 0) {
         const candles = data.result.list
