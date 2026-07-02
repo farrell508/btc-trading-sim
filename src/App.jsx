@@ -23,6 +23,7 @@ function App() {
   const [settings, setSettings] = useState({ showLiquidationLine: true, showAvgPriceLine: true });
   const [activeTab, setActiveTab] = useState("position"); // "position" | "history"
   const isCheckingLiquidation = useRef(false);
+  const candlesRef = useRef([]);
   const showToast = (message, type = "info") => {
     const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, message, type }]);
@@ -85,7 +86,7 @@ function App() {
       // 청산 체크는 별도로 "동시에" 실행 (가격 갱신을 기다리게 하지 않음)
       if (user && position && !isCheckingLiquidation.current) {
         isCheckingLiquidation.current = true;
-        checkLiquidationRequest(user.uid)
+        checkLiquidationRequest(user.uid, candles)
           .then((liqResult) => {
             if (liqResult.liquidated) {
               showToast(
@@ -163,7 +164,7 @@ function App() {
     });
 
     // 접속 시점에 즉시 한 번 청산 체크 (그동안 놓친 청산이 있는지 확인)
-    checkLiquidationRequest(user.uid);
+    checkLiquidationRequest(user.uid, candlesRef.current || []);
 
     return () => unsubscribe();
   }, [user]);
@@ -176,6 +177,9 @@ function App() {
       alert("로그인 실패: " + error.message);
     }
   };
+  useEffect(() => {
+    candlesRef.current = candles;
+  }, [candles]);
 
   const handleLogout = async () => {
     await signOut(auth);
