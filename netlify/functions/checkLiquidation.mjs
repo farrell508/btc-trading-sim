@@ -114,5 +114,5 @@ export default async (req) => {
   }
 };
 export const config = {
-  region: "asia-northeast1", // 도쿄 리전 (일본) - 한국과 가까운 리전
+  region: "nrt",
 };
