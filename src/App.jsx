@@ -86,7 +86,7 @@ function App() {
       // 청산 체크는 별도로 "동시에" 실행 (가격 갱신을 기다리게 하지 않음)
       if (user && position && !isCheckingLiquidation.current) {
         isCheckingLiquidation.current = true;
-        checkLiquidationRequest(user.uid, candles)
+        checkLiquidationRequest(user.uid, candles.slice(-10))
           .then((liqResult) => {
             if (liqResult.liquidated) {
               showToast(
@@ -164,7 +164,7 @@ function App() {
     });
 
     // 접속 시점에 즉시 한 번 청산 체크 (그동안 놓친 청산이 있는지 확인)
-    checkLiquidationRequest(user.uid, candlesRef.current || []);
+    checkLiquidationRequest(user.uid, (candlesRef.current || []).slice(-10));
 
     return () => unsubscribe();
   }, [user]);
