@@ -1,26 +1,45 @@
 import { db } from "./firebaseAdmin.js";
 import { FieldValue } from "firebase-admin/firestore";
 
+// 1분봉은 최대 1000개까지 한 번에 가져올 수 있음 (1000분 = 약 16.6시간)
+// 구간이 이보다 길면 여러 번 나눠서 요청
 async function fetchKlinesForRange(startTimeMs, endTimeMs) {
-  try {
-    const response = await fetch(
-      `https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=1&start=${startTimeMs}&end=${endTimeMs}&limit=1000`
-    );
-    const data = await response.json();
-    if (data.retCode === 0) {
-      return data.result.list
-        .map((item) => ({
-          time: parseInt(item[0]),
-          high: parseFloat(item[2]),
-          low: parseFloat(item[3]),
-        }))
-        .reverse();
+  const allCandles = [];
+  const oneMinuteMs = 60 * 1000;
+  const maxCandlesPerRequest = 1000;
+  const maxRangeMs = oneMinuteMs * maxCandlesPerRequest;
+
+  let currentStart = startTimeMs;
+
+  while (currentStart < endTimeMs) {
+    const currentEnd = Math.min(currentStart + maxRangeMs, endTimeMs);
+
+    try {
+      const response = await fetch(
+        `https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=1&start=${currentStart}&end=${currentEnd}&limit=1000`
+      );
+      const data = await response.json();
+
+      if (data.retCode === 0) {
+        const candles = data.result.list
+          .map((item) => ({
+            time: parseInt(item[0]),
+            high: parseFloat(item[2]),
+            low: parseFloat(item[3]),
+          }))
+          .reverse();
+        allCandles.push(...candles);
+      } else {
+        console.error("Bybit API 에러:", data.retMsg);
+      }
+    } catch (error) {
+      console.error("청산 체크용 캔들 조회 실패:", error);
     }
-    return [];
-  } catch (error) {
-    console.error("청산 체크용 캔들 조회 실패:", error);
-    return [];
+
+    currentStart = currentEnd;
   }
+
+  return allCandles;
 }
 
 export default async (req) => {
@@ -47,7 +66,16 @@ export default async (req) => {
       return new Response(JSON.stringify({ liquidated: false }), { status: 200 });
     }
 
+    console.log(`청산체크 시작: uid=${uid}, side=${pos.side}, liqPrice=${pos.liquidationPrice}, 구간=${new Date(lastChecked).toISOString()} ~ ${new Date(now).toISOString()}`);
+
     const candles = await fetchKlinesForRange(lastChecked, now);
+
+    console.log(`가져온 캔들 개수: ${candles.length}`);
+    if (candles.length > 0) {
+      const highs = candles.map(c => c.high);
+      const lows = candles.map(c => c.low);
+      console.log(`구간 내 최고가: ${Math.max(...highs)}, 최저가: ${Math.min(...lows)}`);
+    }
 
     for (const candle of candles) {
       let hit = false;
@@ -66,6 +94,7 @@ export default async (req) => {
           pnl: -pos.margin,
           timestamp: FieldValue.serverTimestamp(),
         });
+        console.log(`청산 발생! 캔들 시각: ${new Date(candle.time).toISOString()}`);
         return new Response(
           JSON.stringify({ liquidated: true, price: pos.liquidationPrice }),
           { status: 200 }
