@@ -82,30 +82,31 @@ function App() {
   // 2초마다 가격 갱신 + 새 분봉 감지/생성 로직
   useEffect(() => {
     const updatePrice = async () => {
-      // 이전 청산 체크가 아직 진행 중이면 이번엔 건너뜀 (요청이 쌓이는 것 방지)
+      // 청산 체크는 별도로 "동시에" 실행 (가격 갱신을 기다리게 하지 않음)
       if (user && position && !isCheckingLiquidation.current) {
         isCheckingLiquidation.current = true;
-        try {
-          const liqResult = await checkLiquidationRequest(user.uid);
-          if (liqResult.liquidated) {
-            showToast(
-              `포지션이 강제 청산되었습니다. 청산가: $${liqResult.price.toFixed(2)}`,
-              "error"
-            );
-          }
-        } catch (error) {
-          console.error("청산 체크 실패:", error);
-        } finally {
-          isCheckingLiquidation.current = false;
-        }
+        checkLiquidationRequest(user.uid)
+          .then((liqResult) => {
+            if (liqResult.liquidated) {
+              showToast(
+                `포지션이 강제 청산되었습니다. 청산가: $${liqResult.price.toFixed(2)}`,
+                "error"
+              );
+            }
+          })
+          .catch((error) => {
+            console.error("청산 체크 실패:", error);
+          })
+          .finally(() => {
+            isCheckingLiquidation.current = false;
+          });
       }
 
+      // 가격 갱신은 청산 체크를 기다리지 않고 바로 진행
       const result = await fetchBtcPrice();
       if (!result) return;
 
       setBtcPrice(result.price);
-      // ... 이후 candles 업데이트 로직은 그대로 유지
-      // ... candles 업데이트 로직 (기존 그대로 유지)
 
       setCandles((prevCandles) => {
         if (prevCandles.length === 0) return prevCandles;
