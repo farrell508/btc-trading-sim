@@ -28,3 +28,6 @@ export default async (req) => {
     return new Response(JSON.stringify({ error: error.message }), { status: 500 });
   }
 };
+export const config = {
+  region: "asia-northeast1", // 도쿄 리전 (일본) - 한국과 가까운 리전
+};
