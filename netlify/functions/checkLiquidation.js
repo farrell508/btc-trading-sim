@@ -18,6 +18,11 @@ async function fetchKlinesForRange(startTimeMs, endTimeMs) {
       const response = await fetch(
         `https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=1&start=${currentStart}&end=${currentEnd}&limit=1000`
       );
+
+      const rawText = await response.text();
+      console.log(`Bybit 응답 상태: ${response.status}, 내용 일부: ${rawText.substring(0, 300)}`);
+
+      const data = JSON.parse(rawText);
       const data = await response.json();
 
       if (data.retCode === 0) {
