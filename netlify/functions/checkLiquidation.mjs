@@ -28,7 +28,7 @@ export default async (req) => {
     }
 
     const relevantCandles = (candles || []).filter(
-      (c) => c.time * 1000 >= lastChecked && c.time * 1000 <= now
+      (c) => (c.time * 1000 + 60000) > lastChecked
     );
 
     console.log(`필터링된 캔들 수=${relevantCandles.length}`);
