@@ -4,7 +4,7 @@ import { FieldValue } from "firebase-admin/firestore";
 export default async (req) => {
   try {
     const body = await req.json();
-    const { uid, candles } = body; // candles: 클라이언트가 미리 가져온 캔들 배열
+    const { uid, candles } = body;
 
     if (!uid) {
       return new Response(JSON.stringify({ error: "uid가 필요합니다." }), { status: 400 });
@@ -21,14 +21,21 @@ export default async (req) => {
     const now = Date.now();
     const lastChecked = pos.lastCheckedAt ? new Date(pos.lastCheckedAt).getTime() : now;
 
+    console.log(`side=${pos.side}, liqPrice=${pos.liquidationPrice}, lastChecked=${new Date(lastChecked).toISOString()}, now=${new Date(now).toISOString()}, 받은캔들수=${(candles || []).length}`);
+
     if (now - lastChecked < 1000) {
       return new Response(JSON.stringify({ liquidated: false }), { status: 200 });
     }
 
-    // 클라이언트가 보낸 캔들 중, "마지막 체크 이후" 구간만 필터링해서 검사
     const relevantCandles = (candles || []).filter(
       (c) => c.time * 1000 >= lastChecked && c.time * 1000 <= now
     );
+
+    console.log(`필터링된 캔들 수=${relevantCandles.length}`);
+    if (candles && candles.length > 0) {
+      const lastCandle = candles[candles.length - 1];
+      console.log(`가장 최근 캔들 시각=${new Date(lastCandle.time * 1000).toISOString()}, high=${lastCandle.high}, low=${lastCandle.low}`);
+    }
 
     for (const candle of relevantCandles) {
       let hit = false;
@@ -47,6 +54,7 @@ export default async (req) => {
           pnl: -pos.margin,
           timestamp: FieldValue.serverTimestamp(),
         });
+        console.log("청산 발생!");
         return new Response(
           JSON.stringify({ liquidated: true, price: pos.liquidationPrice }),
           { status: 200 }
