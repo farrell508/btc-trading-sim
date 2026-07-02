@@ -7,7 +7,6 @@ export default async (req) => {
     const body = await req.json();
     const { uid, side, marginUsd, leverage, currentPrice } = body;
 
-    // ===== 입력값 검증 (서버에서 반드시 다시 확인) =====
     if (!uid || !side || !marginUsd || !leverage || !currentPrice) {
       return new Response(JSON.stringify({ error: "필수 값이 누락되었습니다." }), { status: 400 });
     }
@@ -21,7 +20,9 @@ export default async (req) => {
     const userRef = db.collection("users").doc(uid);
     const positionRef = db.collection("positions").doc(uid);
 
-    const userSnap = await userRef.get();
+    // 유저 정보와 포지션 정보를 동시에 읽기 (순차적으로 기다리지 않음)
+    const [userSnap, positionSnap] = await Promise.all([userRef.get(), positionRef.get()]);
+
     if (!userSnap.exists) {
       return new Response(JSON.stringify({ error: "유저 정보를 찾을 수 없습니다." }), { status: 404 });
     }
@@ -31,11 +32,11 @@ export default async (req) => {
       return new Response(JSON.stringify({ error: "잔고가 부족합니다." }), { status: 400 });
     }
 
-    const positionSnap = await positionRef.get();
     const addSize = (marginUsd * leverage) / currentPrice;
     const orderNotional = marginUsd * leverage;
-
     const nowIso = new Date().toISOString();
+
+    const batch = db.batch(); // 여러 쓰기 작업을 하나로 묶기 위한 배치
 
     if (positionSnap.exists && positionSnap.data().side === side) {
       // 같은 방향: 물타기/불타기
@@ -46,7 +47,7 @@ export default async (req) => {
       const newLeverage = (newSize * currentPrice) / newMargin;
       const newLiqPrice = calcLiquidationPrice(side, newEntryPrice, newLeverage);
 
-      await positionRef.update({
+      batch.update(positionRef, {
         size: newSize,
         entryPrice: newEntryPrice,
         margin: newMargin,
@@ -55,9 +56,13 @@ export default async (req) => {
         updatedAt: nowIso,
         lastCheckedAt: nowIso,
       });
-      await userRef.update({ balance: userData.balance - marginUsd });
-      await addTradeRecord(uid, side, "add", currentPrice, addSize, leverage, 0);
+      batch.update(userRef, { balance: userData.balance - marginUsd });
+      batch.create(db.collection("trades").doc(), {
+        uid, side, type: "add", price: currentPrice, size: addSize, leverage,
+        pnl: 0, timestamp: FieldValue.serverTimestamp(),
+      });
 
+      await batch.commit();
       return new Response(JSON.stringify({ success: true }), { status: 200 });
     } else if (positionSnap.exists && positionSnap.data().side !== side) {
       // 반대 방향: 상쇄/전환
@@ -70,19 +75,26 @@ export default async (req) => {
         const pnl = calcUnrealizedPnl(pos.side, pos.entryPrice, currentPrice, closeSize);
         const returnedMargin = pos.margin * closeRatio;
 
-        await positionRef.update({
+        batch.update(positionRef, {
           size: pos.size - closeSize,
           margin: pos.margin - returnedMargin,
           updatedAt: nowIso,
           lastCheckedAt: nowIso,
         });
-        await userRef.update({ balance: userData.balance + returnedMargin + pnl });
-        await addTradeRecord(uid, pos.side, "partial_close", currentPrice, closeSize, pos.leverage, pnl);
+        batch.update(userRef, { balance: userData.balance + returnedMargin + pnl });
+        batch.create(db.collection("trades").doc(), {
+          uid, side: pos.side, type: "partial_close", price: currentPrice, size: closeSize,
+          leverage: pos.leverage, pnl, timestamp: FieldValue.serverTimestamp(),
+        });
       } else if (orderNotional === existingNotional) {
         const pnl = calcUnrealizedPnl(pos.side, pos.entryPrice, currentPrice, pos.size);
-        await positionRef.delete();
-        await userRef.update({ balance: userData.balance + pos.margin + pnl });
-        await addTradeRecord(uid, pos.side, "close", currentPrice, pos.size, pos.leverage, pnl);
+
+        batch.delete(positionRef);
+        batch.update(userRef, { balance: userData.balance + pos.margin + pnl });
+        batch.create(db.collection("trades").doc(), {
+          uid, side: pos.side, type: "close", price: currentPrice, size: pos.size,
+          leverage: pos.leverage, pnl, timestamp: FieldValue.serverTimestamp(),
+        });
       } else {
         const pnl = calcUnrealizedPnl(pos.side, pos.entryPrice, currentPrice, pos.size);
         const usedMarginForOffset = pos.margin;
@@ -91,40 +103,38 @@ export default async (req) => {
         const newMarginForNewPosition = marginUsd + usedMarginForOffset + pnl;
         const newLiqPrice = calcLiquidationPrice(side, currentPrice, leverage);
 
-        await positionRef.delete();
-        await positionRef.set({
-          side,
-          size: newSize,
-          entryPrice: currentPrice,
-          margin: newMarginForNewPosition,
-          leverage,
-          liquidationPrice: newLiqPrice,
-          updatedAt: nowIso,
-          lastCheckedAt: nowIso,
+        batch.set(positionRef, {
+          side, size: newSize, entryPrice: currentPrice, margin: newMarginForNewPosition,
+          leverage, liquidationPrice: newLiqPrice, updatedAt: nowIso, lastCheckedAt: nowIso,
         });
-        await userRef.update({ balance: userData.balance - marginUsd });
-        await addTradeRecord(uid, pos.side, "close", currentPrice, pos.size, pos.leverage, pnl);
-        await addTradeRecord(uid, side, "open", currentPrice, newSize, leverage, 0);
+        batch.update(userRef, { balance: userData.balance - marginUsd });
+        batch.create(db.collection("trades").doc(), {
+          uid, side: pos.side, type: "close", price: currentPrice, size: pos.size,
+          leverage: pos.leverage, pnl, timestamp: FieldValue.serverTimestamp(),
+        });
+        batch.create(db.collection("trades").doc(), {
+          uid, side, type: "open", price: currentPrice, size: newSize,
+          leverage, pnl: 0, timestamp: FieldValue.serverTimestamp(),
+        });
       }
 
+      await batch.commit();
       return new Response(JSON.stringify({ success: true }), { status: 200 });
     } else {
       // 포지션 없음: 새로 생성
       const liqPrice = calcLiquidationPrice(side, currentPrice, leverage);
 
-      await positionRef.set({
-        side,
-        size: addSize,
-        entryPrice: currentPrice,
-        margin: marginUsd,
-        leverage,
-        liquidationPrice: liqPrice,
-        updatedAt: nowIso,
-        lastCheckedAt: nowIso,
+      batch.set(positionRef, {
+        side, size: addSize, entryPrice: currentPrice, margin: marginUsd,
+        leverage, liquidationPrice: liqPrice, updatedAt: nowIso, lastCheckedAt: nowIso,
       });
-      await userRef.update({ balance: userData.balance - marginUsd });
-      await addTradeRecord(uid, side, "open", currentPrice, addSize, leverage, 0);
+      batch.update(userRef, { balance: userData.balance - marginUsd });
+      batch.create(db.collection("trades").doc(), {
+        uid, side, type: "open", price: currentPrice, size: addSize,
+        leverage, pnl: 0, timestamp: FieldValue.serverTimestamp(),
+      });
 
+      await batch.commit();
       return new Response(JSON.stringify({ success: true }), { status: 200 });
     }
   } catch (error) {
@@ -132,16 +142,3 @@ export default async (req) => {
     return new Response(JSON.stringify({ error: error.message }), { status: 500 });
   }
 };
-
-async function addTradeRecord(uid, side, type, price, size, leverage, pnl) {
-  await db.collection("trades").add({
-    uid,
-    side,
-    type,
-    price,
-    size,
-    leverage,
-    pnl,
-    timestamp: FieldValue.serverTimestamp(),
-  });
-}

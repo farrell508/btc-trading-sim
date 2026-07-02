@@ -17,8 +17,7 @@ export default async (req) => {
     const userRef = db.collection("users").doc(uid);
     const positionRef = db.collection("positions").doc(uid);
 
-    const userSnap = await userRef.get();
-    const positionSnap = await positionRef.get();
+    const [userSnap, positionSnap] = await Promise.all([userRef.get(), positionRef.get()]);
 
     if (!positionSnap.exists) {
       return new Response(JSON.stringify({ error: "청산할 포지션이 없습니다." }), { status: 400 });
@@ -32,10 +31,12 @@ export default async (req) => {
     const returnedMargin = pos.margin * closeRatio;
     const newBalance = userData.balance + returnedMargin + pnl;
 
+    const batch = db.batch();
+
     if (closeRatio >= 1) {
-      await positionRef.delete();
+      batch.delete(positionRef);
     } else {
-      await positionRef.update({
+      batch.update(positionRef, {
         size: pos.size - closeSize,
         margin: pos.margin - returnedMargin,
         updatedAt: new Date().toISOString(),
@@ -43,9 +44,8 @@ export default async (req) => {
       });
     }
 
-    await userRef.update({ balance: newBalance });
-
-    await db.collection("trades").add({
+    batch.update(userRef, { balance: newBalance });
+    batch.create(db.collection("trades").doc(), {
       uid,
       side: pos.side,
       type: closeRatio >= 1 ? "close" : "partial_close",
@@ -55,6 +55,8 @@ export default async (req) => {
       pnl,
       timestamp: FieldValue.serverTimestamp(),
     });
+
+    await batch.commit();
 
     return new Response(JSON.stringify({ success: true, pnl }), { status: 200 });
   } catch (error) {
