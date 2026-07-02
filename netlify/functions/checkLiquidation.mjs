@@ -1,4 +1,4 @@
-import { db } from "./firebaseAdmin.js";
+import { db } from "./firebaseAdmin.mjs";
 import { FieldValue } from "firebase-admin/firestore";
 
 // 1분봉은 최대 1000개까지 한 번에 가져올 수 있음 (1000분 = 약 16.6시간)

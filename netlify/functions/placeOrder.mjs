@@ -1,4 +1,4 @@
-import { db } from "./firebaseAdmin.js";
+import { db } from "./firebaseAdmin.mjs";
 import { calcLiquidationPrice, calcUnrealizedPnl, calcNewAveragePrice } from "../../src/calc.js";
 import { FieldValue } from "firebase-admin/firestore";
 
